@@ -184,6 +184,7 @@ where:
 * `RESPONSE` is a `reqeusts.Reponse` object that can be unpacked using the
   commands `xml` or `raw`.
 
+
     namespace SHORT, URI
     xml RESPONSE -> DOM
     raw RESPONSE -> STRING
