@@ -185,6 +185,8 @@ where:
   commands `xml` or `raw`.
 
 
+When handling the responses, these commands would come in handy:
+
     namespace SHORT, URI
     xml RESPONSE -> DOM
     raw RESPONSE -> STRING
