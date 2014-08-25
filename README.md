@@ -197,10 +197,11 @@ beginning of the script.
 
 ### SYSTEM COMMANDS
 
-    include MODULE
+    include MODULE, [OPTIONS]
 
 will include a file named `MODULE`.rest, run it and merge its variable space
-into yours.
+into yours. If `OPTIONS` has the term `log`, logging from the included `MODULE`
+will also be printed, else it will be discarded.
 
     env VARIABLE, [DEFAULT] -> TARGET
 

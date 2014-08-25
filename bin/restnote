@@ -350,13 +350,13 @@ class Environment:
     def env(self, name, default=''):
         return os.getenv(name, default)
 
-    def include(self, filename):
+    def include(self, filename, args=''):
         self.log("Include", filename)
         if not filename.endswith('.rest'):
             filename = filename + '.rest'
         if filename == self.filename:
             raise ValueError("Can't include self!")
-        subenv = Environment(self.logger)
+        subenv = Environment(self.logger if 'log' in args else None)
         subenv.session = self.session
         subenv.namespaces = self.namespaces
         subenv.load(filename)
