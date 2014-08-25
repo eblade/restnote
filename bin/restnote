@@ -1,0 +1,575 @@
+#!/usr/bin/env python3
+
+from optparse import OptionParser
+from lxml import etree
+import requests
+import os
+import pprint
+import time
+from urllib.parse import urlparse, urlunparse, urlencode, parse_qsl
+
+try:
+    from pygments import highlight
+    from pygments.lexers import get_lexer_by_name
+    from pygments.formatters import TerminalFormatter, HtmlFormatter
+except ImportError:
+    _have_pygment = False
+else:
+    _have_pygment = True
+
+BOLD = "\033[1m"
+DIM = "\033[2m"
+UNDERLINE = "\033[4m"
+BLINK = "\033[5m"
+NORMAL = "\033[0;0m"
+RED = "\033[31m"
+GREEN = "\033[32m"
+YELLOW = "\033[33m"
+BLUE = "\033[34m"
+DEFAULT = "\033[39m"
+WHITE = "\033[37m"
+BACK_BLUE = "\033[44m"
+BACK_DEFAULT = "\033[49m"
+
+
+# Options
+parser = OptionParser(usage="restnot [options] file")
+parser.add_option(
+    '-f', '--format', dest='output_format', default='terminal',
+    help='output format to use')
+
+
+options, args = parser.parse_args()
+input_filename = args[0]
+pp = pprint.PrettyPrinter(indent=2)
+
+
+class Terminal:
+    def __init__(self):
+        if _have_pygment:
+            self.formatter = TerminalFormatter()
+            self.lexer = get_lexer_by_name('xml')
+
+    def log(self, desc, data=None, data_type=None):
+        print('')
+        if data_type == 'comment':
+            print(DIM + desc + NORMAL)
+            return
+        if data_type == 'title':
+            print(BOLD + BLUE + desc + NORMAL)
+            return
+        if desc is not None:
+            print("%s:: %s ::%s" % (BOLD, desc, NORMAL))
+        if data is not None:
+            if _have_pygment and data_type == 'xml':
+                print(highlight(str(data), self.lexer, self.formatter))
+            elif data_type == 'pp':
+                pp.pprint(data)
+            else:
+                print(data)
+
+    def close(self):
+        pass
+
+
+class HTML:
+    def __init__(self):
+        if _have_pygment:
+            self.formatter = HtmlFormatter()
+            self.lexer = get_lexer_by_name('xml')
+        print("<html><head><style>\n")
+        print(self.formatter.get_style_defs())
+        print(".header { font-family: arial; font-weight: bold }")
+        print(""".code { background-color: #fafafa; border-left: 2px solid #aaa;
+                  padding: 5px; margin-top: 5px; margin-bottom: 5px } """)
+        print(""".comment { font-family: arial; font-weight:
+                  normal; color: blue; margin-bottom: 20px;
+                  font-style: italic; margin-top: 20px}""")
+        print(""".title { font-family: arial; font-size: 24; font-weight:
+                  bold; color: blue; margin-bottom: 20px;
+                  margin-top: 20px}""")
+        print(""".error { font-family: arial; font-size: 12; font-weight:
+                  bold; color: red; margin-bottom: 20px;
+                  margin-top: 20px}""")
+        print("</style></head><body>")
+        self.counter = 0
+
+    def get_id(self):
+        self.counter += 1
+        return "obj%i" % self.counter
+
+    def log(self, desc, data=None, data_type=None):
+        if data_type == 'comment':
+            print("<div class=\"comment\">%s</div>" % desc)
+            return
+        if data_type == 'title':
+            print("<div class=\"title\">%s</div>" % desc)
+            return
+        if data_type == 'error':
+            print("<div class=\"error\">%s</div>" % desc)
+            return
+        if desc is not None:
+            print("<div class=\"header\">%s</div>" % desc)
+        if data is not None:
+            print("<div class=\"code\">")
+            if _have_pygment and data_type == 'xml':
+                print(highlight(str(data), self.lexer, self.formatter))
+            elif data_type == 'pp':
+                print("<pre>")
+                pp.pprint(data)
+                print("</pre>")
+            else:
+                data = (str(data).replace('&', '&amp;').replace('<', '&lt;')
+                        .replace('>', '&gt'))
+                print("<pre>%s</pre>" % data)
+            print("</div>")
+
+    def close(self):
+        print("</body></html>\n")
+
+basevar = {'true': True, 'false': False}
+
+
+class Environment:
+    def __init__(self, logger):
+        self.var = dict(basevar)
+        self.logger = logger
+        self.namespaces = {}
+        self.session = None
+        self.terminate = False
+
+    def log(self, *args):
+        if self.logger is not None:
+            self.logger.log(*args)
+
+    @property
+    def line_iterator(self):
+        if self.read_mode == 'file':
+            with open(self.filename, 'r') as IF:
+                for line in IF:
+                    yield line
+        elif self.read_mode == 'local':
+            for line in self.lines:
+                yield line
+
+    def copy(self):
+        c = Environment(self.logger)
+        c.var = {}
+        c.var.update(self.var)
+        c.session = self.session
+        c.namespaces = self.namespaces
+        c.lines = self.lines
+        c.filename = self.filename
+        c.read_mode = self.read_mode
+        if hasattr(self, 'args'):
+            c.args = self.args
+        return c
+
+    def substitute(self, single, *args):
+        sargs = []
+        keys = [k for k in self.var.keys()
+                if not k.startswith('_')]
+        for arg in args:
+            for key in keys:
+                if arg == '(%s)' % key:
+                    arg = self.var[key]
+                    break
+            for key in keys:
+                try:
+                    arg = arg.replace('(%s)' % key,
+                                      str(self.var[key]))
+                except TypeError:
+                    break
+                except AttributeError:
+                    break
+            sargs.append(arg)
+        if single:
+            return sargs[0]
+        else:
+            return sargs
+
+    def load(self, filename):
+        self.read_mode = 'file'
+        self.filename = filename
+
+    def local(self, name, lines):
+        self.read_mode = 'local'
+        self.lines = lines
+        self.filename = name
+
+    def run(self):
+        self.mode = 'normal'
+        self.data = None
+        for line in self.line_iterator:
+            if self.terminate:
+                break
+            if self.mode == 'until':
+                if line.startswith(self.data_terminator):
+                    self.mode = 'normal'
+                    line = line.replace(self.data_terminator, 'then')
+                else:
+                    self.data += line
+                    continue
+
+            if self.mode == 'block':
+                if line.startswith(self.data_terminator):
+                    self.mode = 'normal'
+                else:
+                    self.data.append(line.strip())
+
+            if self.mode == 'normal':
+                line = line.rstrip()
+                if line.startswith('%%'):
+                    self.log(line[2:], None, 'title')
+                    continue
+                if line.startswith('%'):
+                    self.log(line[1:], None, 'comment')
+                    continue
+                if line == '':
+                    continue
+                parts = line.split(' -> ')
+                if len(parts) == 1:
+                    self.command = line
+                    self.target = None
+                else:
+                    self.command = parts[0].strip()
+                    self.target = parts[1].strip()
+
+                if self.command.startswith('until '):
+                    self.data_terminator = self.command[6:].strip()
+                    self.mode = 'until'
+                    self.data = ''
+                    continue
+
+                if self.command.startswith('while '):
+                    self.data_terminator = 'endwhile'
+                    self.mode = 'block'
+                    self.data = []
+                    self.block_expression = self.command[6:].strip()
+                    continue
+
+                if self.command.startswith('if '):
+                    self.data_terminator = 'endif'
+                    self.mode = 'block'
+                    self.data = []
+                    self.block_expression = self.command[3:].strip()
+                    continue
+
+                if self.command == 'sub':
+                    self.data_terminator = 'endsub'
+                    self.mode = 'block'
+                    self.data = []
+                    self.block_expression = self.command[4:].strip()
+                    continue
+
+                elif self.command == 'then':
+                    if self.target is not None:
+                        self.var[self.target] = self.data
+                else:
+                    parts = self.command.split(' ', 1)
+                    command = parts.pop(0)
+                    if len(parts) > 0:
+                        args = [a.strip() for a in parts.pop().split(',')]
+                    else:
+                        args = []
+                    args = self.substitute(False, *args)
+
+                    if command == 'connect':
+                        result = self.connect(*args)
+                    elif command == 'include':
+                        result = self.include(*args)
+                    elif command == 'env':
+                        result = self.env(*args)
+                    elif command == 'get':
+                        result = self.get(*args)
+                    elif command == 'put':
+                        result = self.put(*args)
+                    elif command == 'post':
+                        result = self.post(*args)
+                    elif command == 'delete':
+                        result = self.delete(*args)
+                    elif command == 'xml':
+                        result = self.xml(*args)
+                    elif command == 'raw':
+                        result = self.raw(*args)
+                    elif command == 'headers':
+                        result = self.headers(*args)
+                    elif command == 'xpath':
+                        result = self.xpath(*args)
+                    elif command == 'fopen':
+                        result = self.fopen(*args)
+                    elif command == 'fclose':
+                        result = self.fclose(*args)
+                    elif command == 'dict':
+                        result = self.dict(*args)
+                    elif command == 'template':
+                        result = self.template(*args)
+                    elif command == 'sleep':
+                        result = self.sleep(*args)
+                    elif command == 'log':
+                        result = self.log(*args)
+                    elif command == 'eval':
+                        result = self.eval(*args)
+                    elif command == 'fill':
+                        result = self.substitute(True, *args)
+                    elif command == 'value':
+                        result = self.value(*args)
+                    elif command == 'each':
+                        result = self.each(*args)
+                    elif command == 'append':
+                        result = self.append(*args)
+                    elif command == 'urilist':
+                        result = self.urilist(*args)
+                    elif command == 'list':
+                        result = self.makelist(*args)
+                    elif command == 'namespace':
+                        result = self.namespace(*args)
+
+                    elif command == 'endwhile':
+                        result = self.endwhile(*args)
+                    elif command == 'endif':
+                        result = self.endif(*args)
+                    elif command == 'endsub':
+                        result = self.endsub(*args)
+                    elif command == 'call':
+                        result = self.callsub(*args)
+                    elif command == 'return':
+                        result = self.returnsub(*args)
+                    else:
+                        raise ValueError("Unknown command '%s'" % command)
+
+                    if self.target is not None:
+                        self.var[self.target] = result
+
+    def connect(self, host, user, password):
+        self.session = requests.Session()
+        self.session.auth = (user, password)
+        self.headers = {}
+        self.log("System", "host=%s, user=%s" % (host, user))
+
+    def env(self, name, default=''):
+        return os.getenv(name, default)
+
+    def include(self, filename):
+        self.log("Include", filename)
+        if not filename.endswith('.rest'):
+            filename = filename + '.rest'
+        if filename == self.filename:
+            raise ValueError("Can't include self!")
+        subenv = Environment(self.logger)
+        subenv.session = self.session
+        subenv.namespaces = self.namespaces
+        subenv.load(filename)
+        subenv.run()
+        self.var.update(subenv.var)
+        self.session = subenv.session
+        self.namespaces = subenv.namespaces
+
+    def xml(self, response):
+        return etree.fromstring(response.content)
+
+    def raw(self, response):
+        return response.content.decode()
+
+    def xpath(self, dom, xpath, want1=True):
+        if not hasattr(dom, 'xpath'):
+            raise TypeError('%s is not an XML element' % str(dom))
+        self.log("Resolve xpath", xpath)
+        result = dom.xpath(xpath, namespaces=self.namespaces)
+        if want1:
+            try:
+                result = result[0]
+            except IndexError:
+                pass
+        self.log("=", result)
+        return result
+
+    def get(self, url, accept=None, headers={}):
+        if accept is not None:
+            headers = dict(headers)
+            headers['accept'] = accept
+        self.log("GET >>> " + url, headers, 'pp')
+        response = self.session.get(url, headers=headers)
+        self.log("GET <<< [%s]" % response.status_code,
+                 dict(response.headers), 'pp')
+        self.log(
+            None,
+            response.content.decode(),
+            'xml' if 'xml' in response.headers.get('content-type', '')
+            else None)
+        return response
+
+    def put(self, url, data, content_type, headers={}):
+        headers = dict(headers)
+        headers['content-type'] = content_type
+        self.log("PUT >>> " + url, headers, 'pp')
+        self.log(None, data, 'xml')
+        response = self.session.put(url, data=data, headers=headers)
+        self.log("PUT <<< [%s]" % response.status_code,
+                 dict(response.headers), 'pp')
+        self.log(
+            None,
+            response.content.decode(),
+            'xml' if 'xml' in response.headers.get('content-type', '')
+            else None)
+        return response
+
+    def post(self, url, data, content_type, headers={}):
+        headers = dict(headers)
+        headers['content-type'] = content_type
+        self.log("POST >>> " + str(url), headers, 'pp')
+        self.log(None, data, 'xml')
+        response = self.session.post(url, data=data, headers=headers)
+        self.log("POST <<< [%s]" % response.status_code,
+                 dict(response.headers), 'pp')
+        self.log(
+            None,
+            response.content.decode(),
+            'xml' if 'xml' in response.headers.get('content-type', '')
+            else None)
+        return response
+
+    def delete(self, url, headers={}):
+        headers = dict(headers)
+        self.log("DELETE >>> " + url, headers, 'pp')
+        response = self.session.delete(url, headers=headers)
+        self.log("DELETE <<< [%s]" % response.status_code,
+                 dict(response.headers), 'pp')
+        self.log(
+            None,
+            response.content.decode(),
+            'xml' if 'xml' in response.headers.get('content-type', '')
+            else None)
+        return response
+
+    def fopen(self, filename, mode='r'):
+        self.log("Open file", filename)
+        return open(filename, mode)
+
+    def fclose(self, f):
+        f.close()
+
+    def dict(self, *pairs):
+        d = {}
+        for key, value in [p.split('=') for p in pairs]:
+            d[key] = self.substitute(True, value)
+        return d
+
+    def template(self, template, subs):
+        self.log('substituting', subs, 'pp')
+        scheme, netloc, path, params, query, fragment = urlparse(template)
+        qparams = parse_qsl(query)
+        new_qparams = []
+        for k, v in qparams:
+            if v.startswith('{'):
+                name = v.replace('{', '').replace('}', '').replace('?', '')
+                if name in subs:
+                    new_qparams.append((k, subs[name]))
+            else:
+                new_qparams.append((k, v))
+        url = urlunparse((scheme, netloc, path, params,
+                          urlencode(new_qparams), fragment))
+        self.log('resulting url', url)
+        return url
+
+    def sleep(self, t):
+        time.sleep(float(t))
+
+    def endwhile(self):
+        subenv = Environment(self.logger)
+        subenv.local(self.block_expression, self.data)
+        subenv.var.update(
+            {k: v for k, v in self.var.items() if not k.startswith('_')})
+        subenv.session = self.session
+        subenv.namespaces = self.namespaces
+        subenv.return_value = None
+        counter = 0
+        while eval(self.block_expression, subenv.var):
+            subenv.run()
+            counter += 1
+        self.return_value = subenv.return_value
+        return counter
+
+    def endif(self):
+        subenv = Environment(self.logger)
+        subenv.local(self.block_expression, self.data)
+        subenv.var = self.var
+        subenv.session = self.session
+        subenv.namespaces = self.namespaces
+        if eval(self.block_expression, self.var):
+            subenv.run()
+            self.return_value = subenv.return_value
+            self.terminate = subenv.terminate
+            return True
+        else:
+            return False
+
+    def endsub(self, *args):
+        subenv = Environment(self.logger)
+        subenv.local(self.block_expression, self.data)
+        subenv.args = args
+        return subenv
+
+    def callsub(self, subenv, *args):
+        if not hasattr(subenv, 'copy') or not hasattr(subenv, 'args'):
+            raise TypeError("%s is not a sub routine" % str(subenv))
+        subenv = subenv.copy()
+        argd = {}
+        for i, arg in enumerate(subenv.args):
+            try:
+                value = args[i]
+            except IndexError:
+                raise TypeError("Missing argument '%s' % arg")
+            argd[arg] = value
+        subenv.var = dict(basevar)
+        subenv.var.update(argd)
+        subenv.session = self.session
+        subenv.namespaces = self.namespaces
+        subenv.return_value = None
+        subenv.run()
+        return subenv.return_value
+
+    def returnsub(self, value):
+        self.terminate = True
+        self.return_value = value
+        return value
+
+    def eval(self, expression):
+        return eval(expression, self.var)
+
+    def value(self, expression):
+        return self.substitute(True, expression)
+
+    def each(self, data, subenv, *args):
+        returns = []
+        for entry in data:
+            returns.append(self.callsub(subenv, entry, *args))
+        return returns
+
+    def append(self, l, entry):
+        l.append(entry)
+        return len(l)
+
+    def urilist(self, uris):
+        return '\n'.join(uris)
+
+    def makelist(self, *items):
+        return items
+
+    def namespace(self, short, uri):
+        self.namespaces[short] = uri
+
+if options.output_format == 'terminal':
+    logger = Terminal()
+elif options.output_format == 'html':
+    logger = HTML()
+else:
+    logger = None
+
+environment = Environment(logger)
+environment.load(input_filename)
+try:
+    environment.run()
+finally:
+    if logger is not None:
+        logger.close()
