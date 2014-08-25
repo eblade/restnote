@@ -71,7 +71,7 @@ where:
 Note that the construct returns the value of the construct, which can be assigned
 to a target varaible:
 
-    if 1 + 1 = 2
+    if 1 + 1 == 2
         log It adds up!
     endif -> result
 
