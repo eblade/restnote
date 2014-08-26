@@ -42,15 +42,16 @@ Objects can be used as parts of strings:
 This example also shows the use of the `value` command to store a string into an
 object. Multi-line strings can be stored using the `until` construct:
 
-    until end
+    until END
     More
     than
     one
     line
-    end -> multiline
+    END -> multiline
 
-where `end` is what the parser waits for at the beginning of the line to stop
-reading data.
+where `END` is what the parser waits for at the beginning of the line to stop
+reading data. You can switch it to `EOF`, `I'm done!` or whatever string you
+would not expect to find first on any line in you data.
 
 
 Branches, loops and functions
@@ -258,13 +259,14 @@ will start a while loop that calls `HANDLAR` with the given arguments every
 
     idle
 
-is a shorthand for running `every` with no arguments.
+is a short-hand for running `every` with no arguments. Though only 20% shorter,
+it's up to 68% more appealing to both the eye and common sense.
 
     debug
 
 will print a list of all current variables in this scope.
 
-### Using Python Classes
+### Using Python classes
 
 It is possible to use Python classes in your script.
 
