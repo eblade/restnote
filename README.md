@@ -208,11 +208,12 @@ will also be printed, else it will be discarded.
 will read the environment variable `VARIABEL` and return the value of it or
 what's in `DEFAULT` (empty string if not given).
 
-    fopen FILE -> TARGET
+    fopen FILE, MODE -> TARGET
     fclose TARGET
 
 will open a file-like object with the file `FILE` and store the object into
-`TARGET`, which can be used as `DATA` by the HTTP commands.
+`TARGET`, which can be used as `DATA` by the HTTP commands. `MODE` is a Python
+style file mode, which can be for example `rb` or `w`.
 
     dict KEY1=VALUE1, ..., KEYn=VALUEn -> TARGET
 
