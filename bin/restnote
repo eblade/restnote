@@ -6,6 +6,8 @@ import requests
 import os
 import pprint
 import time
+import importlib
+import importlib.machinery
 from urllib.parse import urlparse, urlunparse, urlencode, parse_qsl
 
 try:
@@ -51,19 +53,24 @@ class Terminal:
             self.lexer = get_lexer_by_name('xml')
 
     def log(self, desc, data=None, data_type=None):
-        print('')
         if data_type == 'comment':
-            print(DIM + desc + NORMAL)
+            print(BLUE + desc.strip() + NORMAL)
             return
         if data_type == 'title':
             print(BOLD + BLUE + desc + NORMAL)
             return
-        if desc is not None:
-            print("%s:: %s ::%s" % (BOLD, desc, NORMAL))
+        if data_type == 'error':
+            print(BOLD + RED + desc + NORMAL)
+        elif desc is not None:
+            print("%s%s%s" % (BOLD, desc, NORMAL))
         if data is not None:
             if _have_pygment and data_type == 'xml':
-                print(highlight(str(data), self.lexer, self.formatter))
-            elif data_type == 'pp':
+                try:
+                    data = data.decode()
+                except AttributeError:
+                    data = str(data)
+                print(highlight(data, self.lexer, self.formatter))
+            elif data_type in ('pp', 'error'):
                 pp.pprint(data)
             else:
                 print(data)
@@ -137,6 +144,9 @@ class Environment:
         self.namespaces = {}
         self.session = None
         self.terminate = False
+
+    def __repr__(self):
+        return '<Environment %s>' % self.filename
 
     def log(self, *args):
         if self.logger is not None:
@@ -228,12 +238,16 @@ class Environment:
                 if line == '':
                     continue
                 parts = line.split(' -> ')
+                self.must = False
                 if len(parts) == 1:
                     self.command = line
                     self.target = None
                 else:
                     self.command = parts[0].strip()
                     self.target = parts[1].strip()
+                    if self.target.endswith('!'):
+                        self.must = True
+                        self.target = self.target[:-1]
 
                 if self.command.startswith('until '):
                     self.data_terminator = self.command[6:].strip()
@@ -269,7 +283,10 @@ class Environment:
                     parts = self.command.split(' ', 1)
                     command = parts.pop(0)
                     if len(parts) > 0:
-                        args = [a.strip() for a in parts.pop().split(',')]
+                        argstring = parts.pop()
+                        argstring = argstring.replace('\,', '{{COMMA}}')
+                        args = [a.strip().replace('{{COMMA}}', ',')
+                                for a in argstring.split(',')]
                     else:
                         args = []
                     args = self.substitute(False, *args)
@@ -290,6 +307,14 @@ class Environment:
                         result = self.delete(*args)
                     elif command == 'xml':
                         result = self.xml(*args)
+                    elif command == 'xmod':
+                        result = self.xmod(*args)
+                    elif command == 'xattr':
+                        result = self.xattr(*args)
+                    elif command == 'xadd':
+                        result = self.xadd(*args)
+                    elif command == 'xdelete':
+                        result = self.xdelete(*args)
                     elif command == 'raw':
                         result = self.raw(*args)
                     elif command == 'headers':
@@ -335,11 +360,31 @@ class Environment:
                         result = self.callsub(*args)
                     elif command == 'return':
                         result = self.returnsub(*args)
+
+                    elif command == 'external':
+                        result = self.newclass(*args)
+                    elif command == 'internal':
+                        result = self.newlocalclass(*args)
+                    elif command == 'use':
+                        result = self.useclass(*args)
+                    elif command == 'debug':
+                        result = self.debug(*args)
+                    elif command == 'every':
+                        result = self.every(*args)
+                    elif command == 'idle':
+                        result = self.every()
                     else:
                         raise ValueError("Unknown command '%s'" % command)
 
                     if self.target is not None:
                         self.var[self.target] = result
+                        if self.must and result in (None, False, []):
+                            self.log(
+                                "Exiting block, missing required data",
+                                {'command': command,
+                                 'args': args,
+                                 'result': result}, 'error')
+                            self.terminate = True
 
     def connect(self, host, user, password):
         self.session = requests.Session()
@@ -366,7 +411,34 @@ class Environment:
         self.namespaces = subenv.namespaces
 
     def xml(self, response):
-        return etree.fromstring(response.content)
+        try:
+            return etree.fromstring(response.content)
+        except AttributeError:
+            return etree.fromstring(response.encode())
+
+    def xmod(self, dom, xpath, new_value):
+        if xpath == '.':
+            element = dom
+        else:
+            element = self.xpath(dom, xpath)
+        if element is not None:
+            element.text = new_value
+            self.log("New value", new_value, 'pp')
+
+    def xattr(self, dom, xpath, attr, new_value):
+        element = self.xpath(dom, xpath)
+        if element is not None:
+            element.set(attr, new_value)
+            self.log("New attribute value", '%s = "%s"' %
+                     (attr, new_value), 'pp')
+
+    def xadd(self, dom, xpath, tag):
+        element = self.xpath(dom, xpath)
+        if element is not None:
+            prefix, name = tag.split(':', 1)
+            return etree.SubElement(
+                element,
+                '{%s}%s' % (self.namespaces.get(prefix), name))
 
     def raw(self, response):
         return response.content.decode()
@@ -374,21 +446,21 @@ class Environment:
     def xpath(self, dom, xpath, want1=True):
         if not hasattr(dom, 'xpath'):
             raise TypeError('%s is not an XML element' % str(dom))
-        self.log("Resolve xpath", xpath)
         result = dom.xpath(xpath, namespaces=self.namespaces)
         if want1:
             try:
                 result = result[0]
             except IndexError:
-                pass
-        self.log("=", result)
+                if not result:
+                    result = None
+        self.log("Resolve xpath", (xpath, result), 'pp')
         return result
 
     def get(self, url, accept=None, headers={}):
         if accept is not None:
             headers = dict(headers)
             headers['accept'] = accept
-        self.log("GET >>> " + url, headers, 'pp')
+        self.log("GET >>> " + str(url), headers, 'pp')
         response = self.session.get(url, headers=headers)
         self.log("GET <<< [%s]" % response.status_code,
                  dict(response.headers), 'pp')
@@ -402,7 +474,11 @@ class Environment:
     def put(self, url, data, content_type, headers={}):
         headers = dict(headers)
         headers['content-type'] = content_type
-        self.log("PUT >>> " + url, headers, 'pp')
+        self.log("PUT >>> " + str(url), headers, 'pp')
+        try:
+            data = etree.tostring(data)
+        except AttributeError:
+            pass
         self.log(None, data, 'xml')
         response = self.session.put(url, data=data, headers=headers)
         self.log("PUT <<< [%s]" % response.status_code,
@@ -498,7 +574,6 @@ class Environment:
         subenv.namespaces = self.namespaces
         if eval(self.block_expression, self.var):
             subenv.run()
-            self.return_value = subenv.return_value
             self.terminate = subenv.terminate
             return True
         else:
@@ -506,8 +581,10 @@ class Environment:
 
     def endsub(self, *args):
         subenv = Environment(self.logger)
-        subenv.local(self.block_expression, self.data)
+        subenv.local(self.target, self.data)
         subenv.args = args
+        subenv.namespaces = self.namespaces
+        subenv.session = self.session
         return subenv
 
     def callsub(self, subenv, *args):
@@ -523,13 +600,11 @@ class Environment:
             argd[arg] = value
         subenv.var = dict(basevar)
         subenv.var.update(argd)
-        subenv.session = self.session
-        subenv.namespaces = self.namespaces
         subenv.return_value = None
         subenv.run()
         return subenv.return_value
 
-    def returnsub(self, value):
+    def returnsub(self, value=None):
         self.terminate = True
         self.return_value = value
         return value
@@ -558,6 +633,37 @@ class Environment:
 
     def namespace(self, short, uri):
         self.namespaces[short] = uri
+
+    def newclass(self, module_name, class_name, *args):
+        module = importlib.import_module(module_name)
+        Class = getattr(module, class_name)
+        self.log("Constructing local %s" % (Class),
+                 args, 'pp')
+        return Class(*args)
+
+    def newlocalclass(self, path, module_name, class_name, *args):
+        loader = importlib.machinery.SourceFileLoader(
+            module_name, path)
+        module = loader.load_module()
+        Class = getattr(module, class_name)
+        return Class(*args)
+
+    def useclass(self, inst, method, *args):
+        self.log("Calling method %s on %s" %
+                 (method, inst),
+                 args, 'pp')
+        return getattr(inst, method)(*args)
+
+    def debug(self):
+        self.log("Debug", {k: v for k, v in self.var.items()
+                           if not k.startswith('__')}, 'pp')
+
+    def every(self, interval=10, handler=None, *args):
+        while True:
+            self.sleep(interval)
+            if handler is not None:
+                self.callsub(handler, *args)
+
 
 if options.output_format == 'terminal':
     logger = Terminal()

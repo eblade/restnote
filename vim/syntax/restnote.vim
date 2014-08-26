@@ -7,8 +7,10 @@ if exists("b:current_syntax")
   finish
 endif
 
-syn match basicLanguageKeywords "^[ ]*\(connect\|template\|fopen\|fclose\|dict\|xml\|raw\|env\|include\|xpath\|until\|sleep\|while\|endwhile\|if\|endif\|sub\|endsub\|log\|call\|eval\|return\|fill\|value\|each\|urilist\|list\|namespace\)"
+syn match basicLanguageKeywords "^[ ]*\(connect\|template\|fopen\|fclose\|dict\|xml\|raw\|env\|xpath\|xmod\|xadd\|xattr\|xdelete\|until\|sleep\|while\|endwhile\|if\|endif\|sub\|endsub\|log\|call\|eval\|return\|fill\|value\|each\|urilist\|list\|namespace\|idle\|every\)"
 syn match httpVerbs "^[ ]*\(get\|put\|post\|delete\)"
+syn match classTags "^[ ]*\(external\|internal\|use\|include\)"
+syn match debugTags "^[ ]*\(debug\)"
 
 syn match target "->.*$"
 syn match variable "([A-Za-z0-9 ]\+)"
@@ -20,4 +22,6 @@ hi def link comment Comment
 hi def link target Type
 hi def link variable Type
 hi def link basicLanguageKeywords Statement
-hi def link httpVerbs Function
+hi def link httpVerbs String
+hi def link classTags Function
+hi def link debugTags Error

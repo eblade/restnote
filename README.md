@@ -195,7 +195,7 @@ When handling the responses, these commands would come in handy:
 The defining of namespaces is session-global and should be setup in the
 beginning of the script.
 
-### SYSTEM COMMANDS
+### System Commands 
 
     include MODULE, [OPTIONS]
 
@@ -228,6 +228,10 @@ store it into `TARGET`. The `append` command appends `ITEM` to `LIST`.
 
 will store the value `VALUE` into `TARGET`
 
+    makelist ITEM1, ..., ITEMn -> TARGET
+
+will make a list out of the given `ITEM`s.
+
     eval EXPRESSION -> TARGET
 
 will eval `EXPRESSION` in python using your variable space and store the result
@@ -246,13 +250,54 @@ sugar for creating titles and comments.
 will let the process sleep for `SECONDS` seconds, where `SECONDS` is a floating
 point number.
 
-### Various commands
+    every INTERVAL, HANDLER, ARG1, ..., ARGn
+
+will start a while loop that calls `HANDLAR` with the given arguments every
+`INTERVAL` seconds (a floating number).
+
+    idle
+
+is a shorthand for running `every` with no arguments.
+
+    debug
+
+will print a list of all current variables in this scope.
+
+### Using Python Classes
+
+It is possible to use Python classes in your script.
+
+    external MODULE_NAME, CLASS_NAME, ARG1, ..., ARGn -> TARGET
+
+will import `MODULE_NAME`.`CLASS_NAME` using Pythons paths and construct an
+instance with the arguments given as arguments to the contructor. Returned
+is the instance object.
+
+    internal PATH, MODULE_NAME, CLASS_NAME, ARG1, ..., ARGn -> TARGET
+
+on the other hand will load the local file specified by `PATH` and construct
+the class from there.
+
+    use INSTANCE, METHOD, ARG1, ..., ARGn -> TARGET
+
+will call a class method `METHOD` on the instance object `INSTANCE` with the 
+given arguments and return the result of that method.
+
+### Data commands
 
     xpath DOM/ELEMENT, XPATH, [SINGLE=(true)] -> TARGET
 
 will evaluate `XPATH` on `DOM/ELEMENT`. If `SINGLE` is `(true)`, it will return
 the first result, otherwise a list. Attributes `@attribute` and values `/text()`
 will return strings or list of strings.
+
+    xmod DOM/ELEMENT, XPATH, VALUE
+    xattr DOM/ELEMENT, XPATH, ATTRIBUTE, VALUE
+    xadd DOM/ELEMENT, XPATH, TAG
+
+will modify the value, set an attribute, or append a new element with the result
+of `XPATH` as parent element. `VALUE` should be a string for both `xmod` and
+`xattr`.
 
     template TEMPLATE, DICTIONARY -> URL
 
