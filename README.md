@@ -25,9 +25,11 @@ Most operations in restnote follow a simple pattern:
 where:
 
 * `COMMAND` is one of the available keywords described later.
-* `ARG1, ..., ARGn` is a comma-separated list of arguments.
+* `ARG1, ..., ARGn` is a comma-separated list of arguments. If you want to have
+  a comma as part of an argument, simply escape is with backslash, like `\,`.
 * `TARGET` is a variable to use for storing the result. Variable names may
-  include any characters, except for parenteses `()`, but including spaces.
+  include any characters, except for parenteses `()`, but including spaces. If
+  you want to use them with `eval`, python naming rules apply.
 
 Arguments are either a string or an abject. Objects are referred using
 parenteses:
@@ -159,6 +161,22 @@ Example:
     each (my list), (touch) -> my resulting list
     log (my resulting list)
 
+
+### Required output
+
+When making a handler of some sort, a lot of calls returning nothing or false
+values might be showstoppers and should rightfully throw you out of the scope.
+If you wish to have this behaviour on some statement, simply add a `!` after the
+`TARGET`:
+
+    xpath (dom), /atom:entry/atom:id/text() -> atom id!
+
+This is equivalent with writing:
+
+    xpath (dom), /atom:entry/atom:id/text() -> atom_id
+    if atom_id == ''
+        return
+    endif
 
 Command reference
 -----------------
