@@ -4,7 +4,7 @@
 from distutils.core import setup
 
 name_ = 'restnote'
-version_ = '0.0.1'
+version_ = '0.0.2'
 packages_ = [
     'restnote',
 ]
