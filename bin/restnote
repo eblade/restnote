@@ -35,10 +35,10 @@ BACK_DEFAULT = "\033[49m"
 
 
 # Options
-parser = OptionParser(usage="restnot [options] file")
+parser = OptionParser(usage="restnote [options] file")
 parser.add_option(
     '-f', '--format', dest='output_format', default='terminal',
-    help='output format to use')
+    help='output format to use (terminal or html)')
 
 
 options, args = parser.parse_args()

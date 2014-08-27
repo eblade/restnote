@@ -1,6 +1,8 @@
 restnote
 ========
 
+[![Build Status](https://travis-ci.org/eblade/restnote.svg?branch=master)](https://travis-ci.org/eblade/restnote)
+
 Restnote is a scripting layer on the top of Python. The main features are:
 
 * Building Rest-based client scenarios with a minimum of boiler-plate code
