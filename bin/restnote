@@ -42,29 +42,51 @@ parser.add_option(
 
 
 options, args = parser.parse_args()
-input_filename = args[0]
+input_filename = args.pop(0)
 pp = pprint.PrettyPrinter(indent=2)
 
 
 class Terminal:
     def __init__(self):
+        self.mute = False
+        self.smute = []
+        self.graphical = False
         if _have_pygment:
             self.formatter = TerminalFormatter()
             self.lexer = get_lexer_by_name('xml')
 
     def log(self, desc, data=None, data_type=None):
+        if self.mute or data_type in self.smute:
+            return
         if data_type == 'comment':
             print(BLUE + desc.strip() + NORMAL)
             return
         if data_type == 'title':
-            print(BOLD + BLUE + desc + NORMAL)
+            print(BOLD + BLUE + desc.strip() + NORMAL)
+            return
+        if data_type == 'table':
+            lengths = [len(x) for x in desc]
+            for row in data:
+                lengths = [max(lengths[n], len(x)) for n, x in enumerate(row)]
+            fs = '  '.join([('%%-%is' % l) for l in lengths])
+            print(fs % desc)
+            for row in data:
+                print(fs % row)
             return
         if data_type == 'error':
             print(BOLD + RED + desc + NORMAL)
+        elif data_type == 'ok':
+            print(BOLD + GREEN + desc + NORMAL)
         elif desc is not None:
             print("%s%s%s" % (BOLD, desc, NORMAL))
         if data is not None:
             if _have_pygment and data_type == 'xml':
+                try:
+                    data = etree.tostring(data)
+                except AttributeError:
+                    pass
+                except TypeError:
+                    pass
                 try:
                     data = data.decode()
                 except AttributeError:
@@ -81,6 +103,9 @@ class Terminal:
 
 class HTML:
     def __init__(self):
+        self.mute = False
+        self.smute = []
+        self.graphical = True
         if _have_pygment:
             self.formatter = HtmlFormatter()
             self.lexer = get_lexer_by_name('xml')
@@ -98,6 +123,15 @@ class HTML:
         print(""".error { font-family: arial; font-size: 12; font-weight:
                   bold; color: red; margin-bottom: 20px;
                   margin-top: 20px}""")
+        print(""".error { font-family: arial; font-size: 12; font-weight:
+                  bold; color: green; margin-bottom: 20px;
+                  margin-top: 20px}""")
+        print(""" table { font-family: arial; font-size: 12; font-weight:
+                  normal; margin-bottom: 20px;
+                  margin-top: 20px}""")
+        print(""" th { font-family: arial; font-size: 12; font-weight:
+                  bold; text-align: left }""")
+        print(""" td { border-top: 1px solid #ccc }""")
         print("</style></head><body>")
         self.counter = 0
 
@@ -106,20 +140,45 @@ class HTML:
         return "obj%i" % self.counter
 
     def log(self, desc, data=None, data_type=None):
+        if self.mute or data_type in self.smute:
+            return
         if data_type == 'comment':
             print("<div class=\"comment\">%s</div>" % desc)
             return
         if data_type == 'title':
             print("<div class=\"title\">%s</div>" % desc)
             return
+        if data_type == 'table':
+            print("<table><tr>")
+            for heading in desc:
+                print('<th>%s</th>' % heading)
+            print("</tr>")
+            for row in data:
+                print("<tr>")
+                for col in row:
+                    print('<td>%s</td>' % col)
+                print("</tr>")
+            print("</table>")
+            return
         if data_type == 'error':
             print("<div class=\"error\">%s</div>" % desc)
-            return
-        if desc is not None:
+        elif data_type == 'ok':
+            print("<div class=\"ok\">%s</div>" % desc)
+        elif desc is not None:
             print("<div class=\"header\">%s</div>" % desc)
         if data is not None:
             print("<div class=\"code\">")
             if _have_pygment and data_type == 'xml':
+                try:
+                    data = etree.tostring(data)
+                except AttributeError:
+                    pass
+                except TypeError:
+                    pass
+                try:
+                    data = data.decode()
+                except AttributeError:
+                    data = str(data)
                 print(highlight(str(data), self.lexer, self.formatter))
             elif data_type == 'pp':
                 print("<pre>")
@@ -134,12 +193,13 @@ class HTML:
     def close(self):
         print("</body></html>\n")
 
-basevar = {'true': True, 'false': False}
+basevar = {'true': True, 'false': False, 'none': None}
 
 
 class Environment:
     def __init__(self, logger):
         self.var = dict(basevar)
+        self.attached = {}
         self.logger = logger
         self.namespaces = {}
         self.session = None
@@ -171,6 +231,7 @@ class Environment:
         c.lines = self.lines
         c.filename = self.filename
         c.read_mode = self.read_mode
+        c.attached = self.attached
         if hasattr(self, 'args'):
             c.args = self.args
         return c
@@ -327,6 +388,10 @@ class Environment:
                         result = self.fclose(*args)
                     elif command == 'dict':
                         result = self.dict(*args)
+                    elif command == 'argdict':
+                        result = self.argdict(*args)
+                    elif command == 'argpop':
+                        result = self.argpop(*args)
                     elif command == 'template':
                         result = self.template(*args)
                     elif command == 'sleep':
@@ -355,7 +420,7 @@ class Environment:
                     elif command == 'endif':
                         result = self.endif(*args)
                     elif command == 'endsub':
-                        result = self.endsub(*args)
+                        result = self.endsub(self.target, *args)
                     elif command == 'call':
                         result = self.callsub(*args)
                     elif command == 'return':
@@ -373,6 +438,12 @@ class Environment:
                         result = self.every(*args)
                     elif command == 'idle':
                         result = self.every()
+                    elif command == 'attach':
+                        result = self.attach(*args)
+                    elif command == 'setlog':
+                        result = self.setlog(*args)
+                    elif command == 'is':
+                        result = self.i_am(*args)
                     else:
                         raise ValueError("Unknown command '%s'" % command)
 
@@ -384,6 +455,7 @@ class Environment:
                                 {'command': command,
                                  'args': args,
                                  'result': result}, 'error')
+                            self.return_value = False
                             self.terminate = True
 
     def connect(self, host, user, password):
@@ -479,6 +551,8 @@ class Environment:
             data = etree.tostring(data)
         except AttributeError:
             pass
+        except TypeError:
+            pass
         self.log(None, data, 'xml')
         response = self.session.put(url, data=data, headers=headers)
         self.log("PUT <<< [%s]" % response.status_code,
@@ -494,6 +568,12 @@ class Environment:
         headers = dict(headers)
         headers['content-type'] = content_type
         self.log("POST >>> " + str(url), headers, 'pp')
+        try:
+            data = etree.tostring(data)
+        except AttributeError:
+            pass
+        except TypeError:
+            pass
         self.log(None, data, 'xml')
         response = self.session.post(url, data=data, headers=headers)
         self.log("POST <<< [%s]" % response.status_code,
@@ -531,6 +611,15 @@ class Environment:
             d[key] = self.substitute(True, value)
         return d
 
+    def argdict(self):
+        d = {}
+        for key, value in [p.split('=') for p in self.sysargs]:
+            d[key] = self.substitute(True, value)
+        return d
+
+    def argpop(self):
+        return self.sysargs.pop(0)
+
     def template(self, template, subs):
         self.log('substituting', subs, 'pp')
         scheme, netloc, path, params, query, fragment = urlparse(template)
@@ -563,6 +652,9 @@ class Environment:
         while eval(self.block_expression, subenv.var):
             subenv.run()
             counter += 1
+        self.var.update(
+            {k: v for k, v in subenv.var.items()
+             if not k.startswith('_') and k in self.var})
         self.return_value = subenv.return_value
         return counter
 
@@ -579,12 +671,13 @@ class Environment:
         else:
             return False
 
-    def endsub(self, *args):
+    def endsub(self, target, *args):
         subenv = Environment(self.logger)
         subenv.local(self.target, self.data)
         subenv.args = args
         subenv.namespaces = self.namespaces
         subenv.session = self.session
+        subenv.name = target
         return subenv
 
     def callsub(self, subenv, *args):
@@ -599,6 +692,7 @@ class Environment:
                 raise TypeError("Missing argument '%s' % arg")
             argd[arg] = value
         subenv.var = dict(basevar)
+        subenv.var.update(subenv.attached)
         subenv.var.update(argd)
         subenv.return_value = None
         subenv.run()
@@ -664,6 +758,32 @@ class Environment:
             if handler is not None:
                 self.callsub(handler, *args)
 
+    def attach(self, sub, on):
+        self.log("Attaching", sub.name + " on " + on.name)
+        on.attached[sub.name] = sub
+
+    def setlog(self, *args):
+        if self.logger is None:
+            return
+        for arg in args:
+            if arg == 'mute':
+                self.logger.mute = True
+            elif arg == 'unmute':
+                self.logger.mute = False
+            elif arg.startswith('+'):
+                arg = arg[1:]
+                if arg in self.logger.smute:
+                    self.logger.smute.remove(arg)
+            elif arg.startswith('-'):
+                arg = arg[1:]
+                if arg not in self.logger.smute:
+                    self.logger.smute.append(arg)
+
+    def i_am(self, what):
+        if what == 'graphical':
+            if self.logger is not None:
+                return self.logger.graphical
+        return False
 
 if options.output_format == 'terminal':
     logger = Terminal()
@@ -673,6 +793,7 @@ else:
     logger = None
 
 environment = Environment(logger)
+environment.sysargs = args
 environment.load(input_filename)
 try:
     environment.run()

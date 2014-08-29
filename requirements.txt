@@ -2,3 +2,5 @@ requests>=1.2.2
 stomp.py>=4.0.12
 lxml>-3.3.5
 pygments>=1.6
+ansicolor>=0.2.4
+daemonize>=2.3.1

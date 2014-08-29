@@ -70,9 +70,12 @@ class Listener(stomp.ConnectionListener):
     def route(self, where, what):
         if where in self.routes:
             callback = self.routes[where]
-            callback = callback.copy()
-            callback.var.update({callback.args[0]: what})
-            callback.run()
+            if hasattr(callback, 'run'):
+                callback = callback.copy()
+                callback.var.update({callback.args[0]: what})
+                callback.run()
+            else:
+                callback(what)
 
     def register(self, where, callback):
         self.routes[where] = callback

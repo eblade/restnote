@@ -116,7 +116,7 @@ where:
   when using the function.
 * `TARGET` is the variable to store the function in.
 
-The function will only have access to the variable you pass in. Functions are
+The function will only have access to the variables you pass in. Functions are
 called using the `call` command:
 
     call FUNCTION, ARG1, ..., ARGn -> result
@@ -163,6 +163,25 @@ Example:
     each (my list), (touch) -> my resulting list
     log (my resulting list)
 
+If you want to make a function available in another function, you can use the
+`attach` command:
+
+    attach SUB1, SUB2
+
+where `SUB1` will be callable from `SUB2`. Example:
+
+    sub
+        call (b)
+    endsub -> a
+    sub
+        log Hello!
+    endsub -> b
+    attach (b), (a)
+    call (a)
+
+Note that the function `a` in this example does not work as a class, it simple
+may call function `b` as it had been passed along with all calls to it. Other
+objects may not be attached to functions this way.
 
 ### Required output
 
@@ -173,11 +192,13 @@ If you wish to have this behaviour on some statement, simply add a `!` after the
 
     xpath (dom), /atom:entry/atom:id/text() -> atom id!
 
-This is equivalent with writing:
+This is almost equivalent with writing:
 
     xpath (dom), /atom:entry/atom:id/text() -> atom_id
     if atom_id == ''
-        return
+        dict command=xpath, args=..., result=(atom_id) -> errdata
+        log Exiting block, missing required data, (errdata), error
+        return (false)
     endif
 
 Command reference
@@ -249,10 +270,6 @@ store it into `TARGET`. The `append` command appends `ITEM` to `LIST`.
     value VALUE -> TARGET
 
 will store the value `VALUE` into `TARGET`
-
-    makelist ITEM1, ..., ITEMn -> TARGET
-
-will make a list out of the given `ITEM`s.
 
     eval EXPRESSION -> TARGET
 
