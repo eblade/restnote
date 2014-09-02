@@ -8,8 +8,8 @@ if exists("b:current_syntax")
 endif
 
 syn match basicLanguageKeywords "^[ ]*\(connect\|template\|fopen\|fclose\|dict\|xml\|raw\|env\|xpath\|xmod\|xadd\|xattr\|xdelete\|until\|sleep\|while\|endwhile\|if\|endif\|sub\|endsub\|setlog\|log\|call\|eval\|return\|fill\|value\|each\|urilist\|list\|namespace\|idle\|every\)"
-syn match httpVerbs "^[ ]*\(get\|put\|post\|delete\)"
-syn match classTags "^[ ]*\(external\|internal\|use\|include\|attach\|argpop\|argdict\|is\)"
+syn match httpVerbs "^[ ]*\(get\|put\|post\|delete\|xget\)"
+syn match classTags "^[ ]*\(external\|internal\|use\|include\|attach\|argpop\|argdict\|is\|exit\|repl\)"
 syn match debugTags "^[ ]*\(debug\)"
 
 syn match target "->.*$"
