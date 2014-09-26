@@ -30,7 +30,7 @@ setup(
     url='https://github.com/eblade/'+name_,
     download_url=('https://github.com/eblade/%s/archive/v%s.tar.gz'
                   % (name_, version_)),
-    packages=packages_,
+    packages=[],
     scripts=['bin/restnote'],
     classifiers = classifiers
 )
