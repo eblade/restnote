@@ -12,7 +12,7 @@ Restnote is a scripting layer on the top of Python. The main features are:
 Dependencies
 ------------
 
-* python3
+* python2.7
 * requests
 * lxml
 * pygments (optional)
@@ -237,6 +237,19 @@ When handling the responses, these commands would come in handy:
 The defining of namespaces is session-global and should be setup in the
 beginning of the script.
 
+### STOMP
+
+For using a STOMP uri, you can issue:
+
+    stomp USER, PASSWORD, URI, HANDLER -> TARGET
+
+where:
+
+* `USER` and `PASSWORD` are your credentials to the message queue server.
+* `URI` is the stomp uri, typically `stomp://hostname:61613?destination=/queue/myqueue`.
+* `HANDLER` is a handler subroutine declared using `sub` ... `endsub`. The first
+   argument will be used for passing the response.
+
 ### System Commands 
 
     include MODULE, [OPTIONS]
@@ -312,11 +325,6 @@ It is possible to use Python classes in your script.
 will import `MODULE_NAME`.`CLASS_NAME` using Pythons paths and construct an
 instance with the arguments given as arguments to the contructor. Returned
 is the instance object.
-
-    internal PATH, MODULE_NAME, CLASS_NAME, ARG1, ..., ARGn -> TARGET
-
-on the other hand will load the local file specified by `PATH` and construct
-the class from there.
 
     use INSTANCE, METHOD, ARG1, ..., ARGn -> TARGET
 

@@ -4,10 +4,7 @@
 from distutils.core import setup
 
 name_ = 'restnote'
-version_ = '0.0.2'
-packages_ = [
-    'restnote',
-]
+version_ = '0.0.3'
 
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -17,7 +14,7 @@ classifiers = [
     "Operating System :: POSIX",
     "Operating System :: POSIX :: Linux",
     "Topic :: Text Processing :: Markup",
-    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 2.7",
     "Programming Language :: Other Scripting Engines",
     "Topic :: Internet :: WWW/HTTP",
     "Topic :: Text Processing :: Markup :: XML",

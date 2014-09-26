@@ -1,16 +1,19 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 
+from __future__ import with_statement
 from optparse import OptionParser
 from lxml import etree
 import requests
+from requests.utils import CaseInsensitiveDict
 import os
 import pprint
 import time
 import importlib
-import importlib.machinery
 import sys
 import traceback
-from urllib.parse import urlparse, urlunparse, urlencode, parse_qsl
+from urllib import urlencode
+from io import open
+from urlparse import urlparse, urlunparse, parse_qsl, parse_qs
 
 try:
     from pygments import highlight
@@ -21,74 +24,87 @@ except ImportError:
 else:
     _have_pygment = True
 
-BOLD = "\033[1m"
-DIM = "\033[2m"
-UNDERLINE = "\033[4m"
-BLINK = "\033[5m"
-NORMAL = "\033[0;0m"
-RED = "\033[31m"
-GREEN = "\033[32m"
-YELLOW = "\033[33m"
-BLUE = "\033[34m"
-DEFAULT = "\033[39m"
-WHITE = "\033[37m"
-BACK_BLUE = "\033[44m"
-BACK_DEFAULT = "\033[49m"
+try:
+    from one_depends.stomp import Connection10 as Connection
+except:
+    _have_stomp = False
+else:
+    _have_stomp = True
+
+BOLD = u"\033[1m"
+DIM = u"\033[2m"
+UNDERLINE = u"\033[4m"
+BLINK = u"\033[5m"
+NORMAL = u"\033[0;0m"
+RED = u"\033[31m"
+GREEN = u"\033[32m"
+YELLOW = u"\033[33m"
+BLUE = u"\033[34m"
+DEFAULT = u"\033[39m"
+WHITE = u"\033[37m"
+BACK_BLUE = u"\033[44m"
+BACK_DEFAULT = u"\033[49m"
 
 
 # Options
-parser = OptionParser(usage="restnote [options] file")
+parser = OptionParser(usage=u"restnote [options] file")
 parser.add_option(
-    '-f', '--format', dest='output_format', default='terminal',
-    help='output format to use (terminal or none)')
+    u'-f', u'--format', dest=u'output_format', default=u'terminal',
+    help=u'output format to use (terminal or none)')
 parser.add_option(
-    '-s', '--step', dest='step_through', action='store_true',
-    help='step through script')
+    u'-s', u'--step', dest=u'step_through', action=u'store_true',
+    help=u'step through script')
 parser.add_option(
-    '-H', '--html', dest='html',
-    help='log to html file')
-
+    u'-m', u'--html', dest=u'html',
+    help=u'log to html file')
+parser.add_option(
+    u'-H', u'--hostname', dest=u'hostname',
+    help=u'specify a hostname (available as env RESTHOST)')
+parser.add_option(
+    u'-u', u'--user', dest=u'user',
+    help=u'specify a user string "DOMAIN+user:password" (available as env RESTUSER and RESTPASS)')
 
 options, args = parser.parse_args()
 input_filename = args.pop(0)
 pp = pprint.PrettyPrinter(indent=2)
 
 
-class Terminal:
+class Terminal(object):
     def __init__(self):
         self.mute = False
         self.smute = []
         self.graphical = False
         if _have_pygment:
             self.formatter = TerminalFormatter()
-            self.lexer = get_lexer_by_name('xml')
+            self.lexer = get_lexer_by_name(u'xml')
 
     def log(self, desc, data=None, data_type=None):
-        if (self.mute or data_type in self.smute) and data_type != 'error':
+        if (self.mute or data_type in self.smute) and data_type != u'error':
             return
-        if data_type == 'comment':
-            print(BLUE + desc.strip() + NORMAL)
+        if data_type == u'comment':
+            print BLUE + desc.strip() + NORMAL
             return
-        if data_type == 'title':
-            print(BOLD + BLUE + desc.strip() + NORMAL)
+        if data_type == u'title':
+            print BOLD + BLUE + desc.strip() + NORMAL
             return
-        if data_type == 'table':
+        if data_type == u'table':
             lengths = [len(x) for x in desc]
+            max_length = 40
             for row in data:
-                lengths = [max(lengths[n], len(x)) for n, x in enumerate(row)]
-            fs = '  '.join([('%%-%is' % l) for l in lengths])
-            print(fs % desc)
+                lengths = [min(max_length, max(lengths[n], len(x))) for n, x in enumerate(row)]
+            fs = u'  '.join([(u'%%-%is' % l) for l in lengths])
+            print fs % desc
             for row in data:
-                print(fs % row)
+                print fs % tuple([col[:max_length] for col in row])
             return
-        if data_type == 'error':
-            print(BOLD + RED + desc + NORMAL)
-        elif data_type == 'ok':
-            print(BOLD + GREEN + desc + NORMAL)
+        if data_type == u'error':
+            print BOLD + RED + desc + NORMAL
+        elif data_type == u'ok':
+            print BOLD + GREEN + desc + NORMAL
         elif desc is not None:
-            print("%s%s%s" % (BOLD, desc, NORMAL))
+            print u"%s%s%s" % (BOLD, desc, NORMAL)
         if data is not None:
-            if _have_pygment and data_type == 'xml':
+            if _have_pygment and data_type == u'xml':
                 try:
                     data = etree.tostring(data)
                 except AttributeError:
@@ -96,94 +112,109 @@ class Terminal:
                 except TypeError:
                     pass
                 try:
-                    data = data.decode()
+                    data = data.decode('utf8')
                 except AttributeError:
-                    data = str(data)
-                print(highlight(data, self.lexer, self.formatter))
-            elif data_type == 'pp':
-                pp.pprint(data)
+                    data = unicode(data, 'utf8')
+                except UnicodeDecodeError:
+                    pass
+                except UnicodeEncodeError:
+                    pass
+                print highlight(data, self.lexer, self.formatter)
+            elif data_type == u'pp':
+                if isinstance(data, CaseInsensitiveDict) or isinstance(data, dict):
+                    if len(data) == 0:
+                        print('{empty dict}')
+                    else:
+                        longest = max([len(k) for k in data.keys()])
+                        for k, v in data.iteritems():
+                            print((('  %%-%is   %%s' % longest) % (k, v)))
+                        print('')
+                elif isinstance(data, str):
+                    print(data)
+                else:
+                    pp.pprint(data)
             else:
-                print(data)
+                print data
 
     def close(self):
         pass
 
 
-class HTML:
+class HTML(object):
     def __init__(self, filename):
-        self.handle = open(filename, 'w')
+        self.handle = open(filename, u'w')
         self.mute = False
         self.smute = []
         self.graphical = True
         if _have_pygment:
             self.formatter = HtmlFormatter()
-            self.lexer = get_lexer_by_name('xml')
-        self.handle.write("<html><head><style>\n")
+            self.lexer = get_lexer_by_name(u'xml')
+        self.handle.write(u"<html><head><style>\n")
         self.handle.write(self.formatter.get_style_defs())
-        self.handle.write(""".header { font-family: arial;
+        self.handle.write(u""".header { font-family: arial;
                   font-weight: bold }\n""")
-        self.handle.write(""".code { background-color: #fafafa;
+        self.handle.write(u""".code { background-color: #fafafa;
                   border-left: 2px solid #aaa; padding: 5px; margin-top: 5px;
                   margin-bottom: 5px }\n""")
-        self.handle.write(""".comment { font-family: arial; font-weight:
+        self.handle.write(u""".comment { font-family: arial; font-weight:
                   normal; color: blue; margin-bottom: 20px;
                   font-style: italic; margin-top: 20px}\n""")
-        self.handle.write(""".title { font-family: arial; font-size: 24;
+        self.handle.write(u""".title { font-family: arial; font-size: 24;
                   font-weight: bold; color: blue; margin-bottom: 20px;
                   margin-top: 20px}\n""")
-        self.handle.write(""".error { font-family: arial; font-size: 12;
+        self.handle.write(u""".error { font-family: arial; font-size: 12;
                   font-weight: bold; color: red; margin-bottom: 20px;
                   margin-top: 20px}\n""")
-        self.handle.write(""".error { font-family: arial; font-size: 12;
+        self.handle.write(u""".error { font-family: arial; font-size: 12;
                   font-weight: bold; color: green; margin-bottom: 20px;
                   margin-top: 20px}\n""")
-        self.handle.write(""" table { font-family: arial; font-size: 12;
+        self.handle.write(u""" table { font-family: arial; font-size: 12;
                   font-weight: normal; margin-bottom: 20px;
                   margin-top: 20px}\n""")
-        self.handle.write(""" th { font-family: arial; font-size: 12;
+        self.handle.write(u""" th { font-family: arial; font-size: 12;
                   font-weight: bold; text-align: left }\n""")
-        self.handle.write(""" td { border-top: 1px solid #ccc }\n""")
-        self.handle.write("</style></head><body>\n")
+        self.handle.write(u""" td { border-top: 1px solid #ccc }\n""")
+        self.handle.write(u"</style></head><body>\n")
         self.handle.flush()
         self.counter = 0
 
     def get_id(self):
         self.counter += 1
-        return "obj%i" % self.counter
+        return u"obj%i" % self.counter
 
     def log(self, desc, data=None, data_type=None):
-        if (self.mute or data_type in self.smute) and data_type != 'error':
+        if (self.mute or data_type in self.smute) and data_type != u'error':
             return
-        if data_type == 'comment':
-            self.handle.write("<div class=\"comment\">%s</div>\n" % desc)
+        if data_type == u'comment':
+            self.handle.write(u"<div class=\"comment\">%s</div>\n" % desc)
             self.handle.flush()
             return
-        if data_type == 'title':
-            self.handle.write("<div class=\"title\">%s</div>\n" % desc)
+        if data_type == u'title':
+            self.handle.write(u"<div class=\"title\">%s</div>\n" % desc)
             self.handle.flush()
             return
-        if data_type == 'table':
-            self.handle.write("<table><tr>\n")
+        if data_type == u'table':
+            self.handle.write(u"<table><tr>\n")
             for heading in desc:
-                self.handle.write('<th>%s</th>\n' % heading)
-            self.handle.write("</tr>\n")
+                self.handle.write(u'<th>%s</th>\n' % heading)
+            self.handle.write(u"</tr>\n")
             for row in data:
-                self.handle.write("<tr>\n")
+                self.handle.write(u"<tr>\n")
                 for col in row:
-                    self.handle.write('<td>%s</td>\n' % col)
-                self.handle.write("</tr>\n")
-            self.handle.write("</table>\n")
+                    self.handle.write(u'<td>%s</td>\n' % col)
+                self.handle.write(u"</tr>\n")
+            self.handle.write(u"</table>\n")
             self.handle.flush()
             return
-        if data_type == 'error':
-            self.handle.write("<div class=\"error\">%s</div>\n" % desc)
-        elif data_type == 'ok':
-            self.handle.write("<div class=\"ok\">%s</div>\n" % desc)
+        if data_type == u'error':
+            self.handle.write(u"<div class=\"error\">%s</div>\n" % desc)
+        elif data_type == u'ok':
+            self.handle.write(u"<div class=\"ok\">%s</div>\n" % desc)
         elif desc is not None:
-            self.handle.write("<div class=\"header\">%s</div>\n" % desc)
+            self.handle.write(u"<div class=\"header\">%s</div>\n" % desc)
         if data is not None:
-            self.handle.write("<div class=\"code\">\n")
-            if _have_pygment and data_type == 'xml':
+            self.handle.write(u"<div class=\"code\">\n")
+            if _have_pygment and data_type == u'xml':
                 try:
                     data = etree.tostring(data)
                 except AttributeError:
@@ -193,28 +224,88 @@ class HTML:
                 try:
                     data = data.decode()
                 except AttributeError:
-                    data = str(data)
-                self.handle.write(highlight(str(data), self.lexer,
+                    data = unicode(data)
+                except UnicodeDecodeError:
+                    pass
+                except UnicodeEncodeError:
+                    pass
+                self.handle.write(highlight(unicode(data), self.lexer,
                                             self.formatter))
-            elif data_type == 'pp':
-                self.handle.write("<pre>\n")
+            elif data_type == u'pp':
+                self.handle.write(u"<pre>\n")
                 self.handle.write(pp.pformat(data))
-                self.handle.write("</pre>\n")
+                self.handle.write(u"</pre>\n")
             else:
-                data = (str(data).replace('&', '&amp;').replace('<', '&lt;')
-                        .replace('>', '&gt'))
-                self.handle.write("<pre>%s</pre>\n" % data)
-            self.handle.write("</div>\n")
+                data = (unicode(data).replace(u'&', u'&amp;').replace(u'<', u'&lt;')
+                        .replace(u'>', u'&gt'))
+                self.handle.write(u"<pre>%s</pre>\n" % data)
+            self.handle.write(u"</div>\n")
         self.handle.flush()
 
     def close(self):
-        self.handle.write("</body></html>\n")
+        self.handle.write(u"</body></html>\n")
         self.handle.close()
 
-basevar = {'true': True, 'false': False, 'none': None}
+
+class StompResponse:
+    def __init__(self, headers, content, status_code):
+        self.headers = headers
+        self.content = bytes(content)
+        self.status_code = status_code
+        self.url = headers.get('location', None)
 
 
-class Environment:
+class StompListener(object):
+    def __init__(self, logger, user, password, url, handler):
+        self.handler = handler
+        self.url = url
+        self.logger = logger
+        urldata = urlparse(url)
+        hostname = urldata.hostname
+        port = urldata.port
+        q = parse_qs(urldata.query)
+        destination = q.get('destination')[0]
+        self.conn = Connection([(hostname, port)])
+        self.conn.set_listener('', self)
+        self.conn.start()
+        self.conn.connect(user, password, wait=True)
+        self.conn.subscribe(destination=destination, ack='auto')
+        self.logger.log("Connected to STOMP", url)
+
+    def __repr__(self):
+        return '<Listener %s>' % self.url
+
+    def on_error(self, headers, message):
+        self.logger.log('Stomp error', StompResponse(headers, message, 500), 'error')
+        
+    def on_message(self, headers, message):
+        response =  StompResponse(headers, message, 200)
+        self.logger.log('Stomp message', response.content, 'xml')
+        callback = self.handler.copy()
+        callback.var.update({callback.args[0]: response})
+        callback.run()
+
+    def on_connecting(self, hap):
+        self.logger.log('Stomp connection', '%s:%s' % (hap[0], str(hap[1])), 'info')
+
+    def on_disconnected(self):
+        self.logger.log('Stomp disconnected', None, 'error')
+
+    def on_heartbeat_time_out(self):
+        self.logger.log('Stomp heartbeat timeout', None, 'error')
+
+    def close(self, url):
+        conn = self.connections.get(url)
+        if conn is not None:
+            conn.stop()
+            del self.connections[url]
+
+
+basevar = {u'true': True, u'false': False, u'none': None,
+    u'stomp available': _have_stomp, u'pygments available': _have_pygment}
+
+
+class Environment(object):
     def __init__(self, logger):
         self.var = dict(basevar)
         self.attached = {}
@@ -224,9 +315,13 @@ class Environment:
         self.terminate = False
         self.step_through = False
         self.position = 0
+        self.is_sub = False
 
     def __repr__(self):
-        return '<Environment %s>' % self.filename
+        if self.is_sub:
+            return u'<Sub (%s) %s>' % (self.name, ', '.join(self.args))
+        else:
+            return u'<Environment %s>' % self.filename
 
     def log(self, *args):
         if self.logger is not None:
@@ -234,12 +329,12 @@ class Environment:
 
     @property
     def line_iterator(self):
-        if self.read_mode in ('local', 'file'):
+        if self.read_mode in (u'local', u'file'):
             if self.position < len(self.lines) - 1:
                 self.position += 1
                 return self.lines[self.position]
-        if self.read_mode == 'repl':
-            return input('> ')
+        if self.read_mode == u'repl':
+            return raw_input(u'> ')
         else:
             return None
 
@@ -253,23 +348,23 @@ class Environment:
         c.filename = self.filename
         c.read_mode = self.read_mode
         c.attached = self.attached
-        if hasattr(self, 'args'):
+        if hasattr(self, u'args'):
             c.args = self.args
         return c
 
     def substitute(self, single, *args):
         sargs = []
         keys = [k for k in self.var.keys()
-                if not k.startswith('_')]
+                if not k.startswith(u'_')]
         for arg in args:
             for key in keys:
-                if arg == '(%s)' % key:
+                if arg == u'(%s)' % key:
                     arg = self.var[key]
                     break
             for key in keys:
                 try:
-                    arg = arg.replace('(%s)' % key,
-                                      str(self.var[key]))
+                    arg = arg.replace(u'(%s)' % key,
+                                      unicode(self.var[key]))
                 except TypeError:
                     break
                 except AttributeError:
@@ -281,23 +376,23 @@ class Environment:
             return sargs
 
     def load(self, filename):
-        self.read_mode = 'file'
+        self.read_mode = u'file'
         self.filename = filename
-        with open(self.filename, 'r') as IF:
+        with open(self.filename, u'r') as IF:
             self.lines = IF.readlines()
 
     def local(self, name, lines):
-        self.read_mode = 'local'
+        self.read_mode = u'local'
         self.lines = lines
         self.filename = name
 
     def repl(self, filename=None):
-        self.read_mode = 'repl'
+        self.read_mode = u'repl'
         self.position = -1
         self.filename = self.filename or filename
 
     def run(self):
-        self.mode = 'normal'
+        self.mode = u'normal'
         self.data = None
         self.position = -1
         while True:
@@ -306,35 +401,35 @@ class Environment:
                 break
             if self.terminate:
                 break
-            if self.mode == 'until':
+            if self.mode == u'until':
                 if line.startswith(self.data_terminator):
-                    self.mode = 'normal'
-                    line = line.replace(self.data_terminator, 'then')
+                    self.mode = u'normal'
+                    line = line.replace(self.data_terminator, u'then')
                 else:
                     self.data += line
                     continue
 
-            if self.mode == 'block':
+            if self.mode == u'block':
                 if line.startswith(self.data_terminator):
-                    self.mode = 'normal'
+                    self.mode = u'normal'
                 else:
                     self.data.append(line.strip())
 
-            if self.mode == 'normal':
+            if self.mode == u'normal':
                 line = line.strip()
-                if line.startswith('%%'):
-                    self.log(line[2:], None, 'title')
+                if line.startswith(u'%%'):
+                    self.log(line[2:], None, u'title')
                     continue
-                if line.startswith('%'):
-                    self.log(line[1:], None, 'comment')
+                if line.startswith(u'%'):
+                    self.log(line[1:], None, u'comment')
                     continue
-                if line == '':
+                if line == u'':
                     continue
-                if self.step_through and not line.startswith('setlog'):
-                    i = input("> %s " % line)
-                    if i == 'skip':
+                if self.step_through and not line.startswith(u'setlog'):
+                    i = raw_input(u"> %s " % line)
+                    if i == u'skip':
                         continue
-                parts = line.split(' -> ')
+                parts = line.split(u' -> ')
                 self.must = False
                 if len(parts) == 1:
                     self.command = line
@@ -342,175 +437,177 @@ class Environment:
                 else:
                     self.command = parts[0].strip()
                     self.target = parts[1].strip()
-                    if self.target.endswith('!'):
+                    if self.target.endswith(u'!'):
                         self.must = True
                         self.target = self.target[:-1]
 
-                if self.command.startswith('('):
-                    self.command = 'call %s' % self.command
+                if self.command.startswith(u'('):
+                    self.command = u'call %s' % self.command
 
-                if self.command.startswith('until '):
+                if self.command.startswith(u'until '):
                     self.data_terminator = self.command[6:].strip()
-                    self.mode = 'until'
-                    self.data = ''
+                    self.mode = u'until'
+                    self.data = u''
                     continue
 
-                if self.command.startswith('while '):
-                    self.data_terminator = 'endwhile'
-                    self.mode = 'block'
+                if self.command.startswith(u'while '):
+                    self.data_terminator = u'endwhile'
+                    self.mode = u'block'
                     self.data = []
                     self.block_expression = self.command[6:].strip()
                     continue
 
-                if self.command.startswith('if '):
-                    self.data_terminator = 'endif'
-                    self.mode = 'block'
+                if self.command.startswith(u'if '):
+                    self.data_terminator = u'endif'
+                    self.mode = u'block'
                     self.data = []
                     self.block_expression = self.command[3:].strip()
                     continue
 
-                if self.command == 'sub':
-                    self.data_terminator = 'endsub'
-                    self.mode = 'block'
+                if self.command == u'sub':
+                    self.data_terminator = u'endsub'
+                    self.mode = u'block'
                     self.data = []
                     self.block_expression = self.command[4:].strip()
                     continue
 
-                elif self.command == 'then':
+                elif self.command == u'then':
                     if self.target is not None:
                         self.var[self.target] = self.data
                 else:
-                    parts = self.command.split(' ', 1)
+                    parts = self.command.split(u' ', 1)
                     command = parts.pop(0)
                     if len(parts) > 0:
                         argstring = parts.pop()
-                        argstring = argstring.replace('\,', '{{COMMA}}')
-                        args = [a.strip().replace('{{COMMA}}', ',')
-                                for a in argstring.split(',')]
+                        argstring = argstring.replace(u'\,', u'{{COMMA}}')
+                        args = [a.strip().replace(u'{{COMMA}}', u',')
+                                for a in argstring.split(u',')]
                     else:
                         args = []
                     args = self.substitute(False, *args)
 
                     try:
-                        if command == 'connect':
+                        if command == u'connect':
                             result = self.connect(*args)
-                        elif command == 'include':
+                        elif command == u'include':
                             result = self.include(*args)
-                        elif command == 'env':
+                        elif command == u'help':
+                            result = self.printhelp(*args)
+                        elif command == u'env':
                             result = self.env(*args)
-                        elif command == 'get':
+                        elif command == u'get':
                             result = self.get(*args)
-                        elif command == 'xget':
+                        elif command == u'xget':
                             result = self.get(*args)
                             result = self.xml(result)
-                        elif command == 'put':
+                        elif command == u'put':
                             result = self.put(*args)
-                        elif command == 'post':
+                        elif command == u'post':
                             result = self.post(*args)
-                        elif command == 'delete':
+                        elif command == u'delete':
                             result = self.delete(*args)
-                        elif command == 'xml':
+                        elif command == u'xml':
                             result = self.xml(*args)
-                        elif command == 'xmod':
+                        elif command == u'xmod':
                             result = self.xmod(*args)
-                        elif command == 'xattr':
+                        elif command == u'xattr':
                             result = self.xattr(*args)
-                        elif command == 'xadd':
+                        elif command == u'xadd':
                             result = self.xadd(*args)
-                        elif command == 'xdelete':
+                        elif command == u'xdelete':
                             result = self.xdelete(*args)
-                        elif command == 'raw':
+                        elif command == u'raw':
                             result = self.raw(*args)
-                        elif command == 'headers':
+                        elif command == u'headers':
                             result = self.headers(*args)
-                        elif command == 'xpath':
+                        elif command == u'xpath':
                             result = self.xpath(*args)
-                        elif command == 'fopen':
+                        elif command == u'fopen':
                             result = self.fopen(*args)
-                        elif command == 'fclose':
+                        elif command == u'fclose':
                             result = self.fclose(*args)
-                        elif command == 'dict':
+                        elif command == u'dict':
                             result = self.dict(*args)
-                        elif command == 'argdict':
+                        elif command == u'argdict':
                             result = self.argdict(*args)
-                        elif command == 'argpop':
+                        elif command == u'argpop':
                             result = self.argpop(*args)
-                        elif command == 'template':
+                        elif command == u'template':
                             result = self.template(*args)
-                        elif command == 'sleep':
+                        elif command == u'sleep':
                             result = self.sleep(*args)
-                        elif command == 'log':
+                        elif command == u'log':
                             result = self.log(*args)
-                        elif command == 'eval':
+                        elif command == u'eval':
                             result = self.eval(*args)
-                        elif command == 'fill':
+                        elif command == u'fill':
                             result = self.substitute(True, *args)
-                        elif command == 'value':
+                        elif command == u'value':
                             result = self.value(*args)
-                        elif command == 'each':
+                        elif command == u'each':
                             result = self.each(*args)
-                        elif command == 'append':
+                        elif command == u'append':
                             result = self.append(*args)
-                        elif command == 'urilist':
+                        elif command == u'urilist':
                             result = self.urilist(*args)
-                        elif command == 'list':
+                        elif command == u'list':
                             result = self.makelist(*args)
-                        elif command == 'namespace':
+                        elif command == u'namespace':
                             result = self.namespace(*args)
-
-                        elif command == 'endwhile':
+                        elif command == u'endwhile':
                             result = self.endwhile(*args)
-                        elif command == 'endif':
+                        elif command == u'endif':
                             result = self.endif(*args)
-                        elif command == 'endsub':
+                        elif command == u'endsub':
                             result = self.endsub(self.target, *args)
-                        elif command == 'call':
+                        elif command == u'call':
                             result = self.callsub(*args)
-                        elif command == 'return':
+                        elif command == u'return':
                             result = self.returnsub(*args)
-
-                        elif command == 'external':
+                        elif command == u'external':
                             result = self.newclass(*args)
-                        elif command == 'internal':
+                        elif command == u'internal':
                             result = self.newlocalclass(*args)
-                        elif command == 'use':
+                        elif command == u'use':
                             result = self.useclass(*args)
-                        elif command == 'debug':
+                        elif command == u'debug':
                             result = self.debug(*args)
-                        elif command == 'every':
+                        elif command == u'every':
                             result = self.every(*args)
-                        elif command == 'idle':
+                        elif command == u'idle':
                             result = self.every()
-                        elif command == 'attach':
+                        elif command == u'attach':
                             result = self.attach(*args)
-                        elif command == 'setlog':
+                        elif command == u'setlog':
                             result = self.setlog(*args)
-                        elif command == 'is':
+                        elif command == u'is':
                             result = self.i_am(*args)
-                        elif command == 'repl':
+                        elif command == u'repl':
                             result = self.repl()
-                        elif command == 'exit':
+                        elif command == u'stomp' and _have_stomp:
+                            result = self.stomp(*args)
+                        elif command == u'exit':
                             break
                         else:
-                            raise ValueError("Unknown command '%s'" % command)
+                            raise ValueError(u"Unknown command '%s'" % command)
 
                         if self.target is not None:
                             self.var[self.target] = result
                             if self.must and result in (None, False, []):
                                 self.log(
-                                    "Exiting block, missing required data",
-                                    {'command': command,
-                                     'args': args,
-                                     'result': result}, 'error')
+                                    u"Exiting block, missing required data",
+                                    {u'command': command,
+                                     u'args': args,
+                                     u'result': result}, u'error')
                                 self.return_value = False
                                 self.terminate = True
-                    except Exception as e:
-                        if self.read_mode == 'repl':
+                    except Exception, e:
+                        if self.read_mode == u'repl':
                             et, ev, etb = sys.exc_info()
                             tb = traceback.extract_tb(etb)
-                            tbs = ['%s +%i %s: %s' % x for x in tb]
-                            self.log(str(e), '\n'.join(tbs),
-                                     'error')
+                            tbs = [u'%s +%i %s: %s' % x for x in tb]
+                            self.log(unicode(e), u'\n'.join(tbs),
+                                     u'error')
                         else:
                             raise e
 
@@ -518,18 +615,29 @@ class Environment:
         self.session = requests.Session()
         self.session.auth = (user, password)
         self.headers = {}
-        self.log("System", "host=%s, user=%s" % (host, user))
+        self.log(u"System", u"host=%s, user=%s" % (host, user))
 
-    def env(self, name, default=''):
+    def env(self, name, default=u''):
+        if name == u'RESTHOST' and options.hostname is not None:
+            return options.hostname
+        if name == u'RESTUSER' and options.user is not None:
+            return options.user.split(':')[0]
+        if name == u'RESTPASS' and options.user is not None:
+            return options.user.split(':')[1]
+        if default == u'':
+            if name == u'RESTUSER':
+                default = 'user'
+            elif name == u'RESTPASS':
+                default = 'user'
         return os.getenv(name, default)
 
-    def include(self, filename, args=''):
-        self.log("Include %s" % filename)
-        if not filename.endswith('.rest'):
-            filename = filename + '.rest'
+    def include(self, filename, args=u''):
+        self.log(u"Include %s" % filename)
+        if not filename.endswith(u'.rest'):
+            filename = filename + u'.rest'
         if filename == self.filename:
-            raise ValueError("Can't include self!")
-        subenv = Environment(self.logger if 'log' in args else None)
+            raise ValueError(u"Can't include self!")
+        subenv = Environment(self.logger if u'log' in args else None)
         subenv.session = self.session
         subenv.namespaces = self.namespaces
         subenv.load(filename)
@@ -545,35 +653,35 @@ class Environment:
             return etree.fromstring(response.encode())
 
     def xmod(self, dom, xpath, new_value):
-        if xpath == '.':
+        if xpath == u'.':
             element = dom
         else:
             element = self.xpath(dom, xpath)
         if element is not None:
             element.text = new_value
-            self.log("New value", new_value, 'pp')
+            self.log(u"New value", new_value, u'pp')
 
     def xattr(self, dom, xpath, attr, new_value):
         element = self.xpath(dom, xpath)
         if element is not None:
             element.set(attr, new_value)
-            self.log("New attribute value", '%s = "%s"' %
-                     (attr, new_value), 'pp')
+            self.log(u"New attribute value", u'%s = "%s"' %
+                     (attr, new_value), u'pp')
 
     def xadd(self, dom, xpath, tag):
         element = self.xpath(dom, xpath)
         if element is not None:
-            prefix, name = tag.split(':', 1)
+            prefix, name = tag.split(u':', 1)
             return etree.SubElement(
                 element,
-                '{%s}%s' % (self.namespaces.get(prefix), name))
+                u'{%s}%s' % (self.namespaces.get(prefix), name))
 
     def raw(self, response):
         return response.content.decode()
 
     def xpath(self, dom, xpath, want1=True):
-        if not hasattr(dom, 'xpath'):
-            raise TypeError('%s is not an XML element' % str(dom))
+        if not hasattr(dom, u'xpath'):
+            raise TypeError(u'%s is not an XML element' % unicode(dom))
         result = dom.xpath(xpath, namespaces=self.namespaces)
         if want1:
             try:
@@ -581,81 +689,81 @@ class Environment:
             except IndexError:
                 if not result:
                     result = None
-        self.log("Resolve xpath", (xpath, result), 'pp')
+        self.log(u"Resolve xpath", (xpath, result), u'pp')
         return result
 
     def get(self, url, accept=None, headers={}):
         if accept is not None:
             headers = dict(headers)
-            headers['accept'] = accept
-        self.log("GET >>> " + str(url), headers, 'pp')
+            headers[u'accept'] = accept
+        self.log(u"GET >>> " + unicode(url), headers, u'pp')
         response = self.session.get(url, headers=headers)
-        self.log("GET <<< [%s]" % response.status_code,
-                 dict(response.headers), 'pp')
+        self.log(u"GET <<< [%s]" % response.status_code,
+                 dict(response.headers), u'pp')
         self.log(
             None,
-            response.content.decode(),
-            'xml' if 'xml' in response.headers.get('content-type', '')
-            else None)
+            response.content.decode('utf-8'),
+            u'xml' if u'xml' in response.headers.get(u'content-type', u'')
+                else None)
         return response
 
     def put(self, url, data, content_type, headers={}):
         headers = dict(headers)
-        headers['content-type'] = content_type
-        self.log("PUT >>> " + str(url), headers, 'pp')
+        headers[u'content-type'] = content_type
+        self.log(u"PUT >>> " + unicode(url), headers, u'pp')
         try:
             data = etree.tostring(data)
         except AttributeError:
             pass
         except TypeError:
             pass
-        self.log(None, data, 'xml')
+        self.log(None, data, u'xml')
         response = self.session.put(url, data=data, headers=headers)
-        self.log("PUT <<< [%s]" % response.status_code,
-                 dict(response.headers), 'pp')
+        self.log(u"PUT <<< [%s]" % response.status_code,
+                 dict(response.headers), u'pp')
         self.log(
             None,
             response.content.decode(),
-            'xml' if 'xml' in response.headers.get('content-type', '')
+            u'xml' if u'xml' in response.headers.get(u'content-type', u'')
             else None)
         return response
 
     def post(self, url, data, content_type, headers={}):
         headers = dict(headers)
-        headers['content-type'] = content_type
-        self.log("POST >>> " + str(url), headers, 'pp')
+        headers[u'content-type'] = content_type
+        self.log(u"POST >>> " + unicode(url), headers, u'pp')
         try:
             data = etree.tostring(data)
         except AttributeError:
             pass
         except TypeError:
             pass
-        self.log(None, data, 'xml')
+        self.log(None, data, u'xml')
         response = self.session.post(url, data=data, headers=headers)
-        self.log("POST <<< [%s]" % response.status_code,
-                 dict(response.headers), 'pp')
+        self.log(u"POST <<< [%s]" % response.status_code,
+                 dict(response.headers), u'pp')
         self.log(
             None,
             response.content.decode(),
-            'xml' if 'xml' in response.headers.get('content-type', '')
+            u'xml' if u'xml' in response.headers.get(u'content-type', u'')
             else None)
         return response
 
     def delete(self, url, headers={}):
         headers = dict(headers)
-        self.log("DELETE >>> " + url, headers, 'pp')
+        self.log(u"DELETE >>> " + url, headers, u'pp')
         response = self.session.delete(url, headers=headers)
-        self.log("DELETE <<< [%s]" % response.status_code,
-                 dict(response.headers), 'pp')
+        self.log(u"DELETE <<< [%s]" % response.status_code,
+                 dict(response.headers), u'pp')
         self.log(
             None,
             response.content.decode(),
-            'xml' if 'xml' in response.headers.get('content-type', '')
+            u'xml' if u'xml' in response.headers.get(u'content-type', u'')
             else None)
         return response
 
-    def fopen(self, filename, mode='r'):
-        self.log("Open file", filename)
+    def fopen(self, filename, mode=u'r'):
+        self.log(u"Open file", filename)
         return open(filename, mode)
 
     def fclose(self, f):
@@ -663,13 +771,13 @@ class Environment:
 
     def dict(self, *pairs):
         d = {}
-        for key, value in [p.split('=') for p in pairs]:
+        for key, value in [p.split(u'=') for p in pairs]:
             d[key] = self.substitute(True, value)
         return d
 
     def argdict(self):
         d = {}
-        for key, value in [p.split('=') for p in self.sysargs]:
+        for key, value in [p.split(u'=') for p in self.sysargs]:
             d[key] = self.substitute(True, value)
         return d
 
@@ -677,20 +785,20 @@ class Environment:
         return self.sysargs.pop(0)
 
     def template(self, template, subs):
-        self.log('substituting', subs, 'pp')
+        self.log(u'substituting', subs, u'pp')
         scheme, netloc, path, params, query, fragment = urlparse(template)
         qparams = parse_qsl(query)
         new_qparams = []
         for k, v in qparams:
-            if v.startswith('{'):
-                name = v.replace('{', '').replace('}', '').replace('?', '')
+            if v.startswith(u'{'):
+                name = v.replace(u'{', u'').replace(u'}', u'').replace(u'?', u'')
                 if name in subs:
                     new_qparams.append((k, subs[name]))
             else:
                 new_qparams.append((k, v))
         url = urlunparse((scheme, netloc, path, params,
                           urlencode(new_qparams), fragment))
-        self.log('resulting url', url)
+        self.log(u'resulting url', url)
         return url
 
     def sleep(self, t):
@@ -700,7 +808,7 @@ class Environment:
         subenv = Environment(self.logger)
         subenv.local(self.block_expression, self.data)
         subenv.var.update(
-            {k: v for k, v in self.var.items() if not k.startswith('_')})
+            dict((k, v) for k, v in self.var.items() if not k.startswith(u'_')))
         subenv.session = self.session
         subenv.namespaces = self.namespaces
         subenv.return_value = None
@@ -709,8 +817,8 @@ class Environment:
             subenv.run()
             counter += 1
         self.var.update(
-            {k: v for k, v in subenv.var.items()
-             if not k.startswith('_') and k in self.var})
+            dict((k, v) for k, v in subenv.var.items()
+             if not k.startswith(u'_') and k in self.var))
         self.return_value = subenv.return_value
         return counter
 
@@ -734,18 +842,19 @@ class Environment:
         subenv.namespaces = self.namespaces
         subenv.session = self.session
         subenv.name = target
+        subenv.is_sub = True
         return subenv
 
     def callsub(self, subenv, *args):
-        if not hasattr(subenv, 'copy') or not hasattr(subenv, 'args'):
-            raise TypeError("%s is not a sub routine" % str(subenv))
+        if not hasattr(subenv, u'copy') or not hasattr(subenv, u'args'):
+            raise TypeError(u"%s is not a sub routine" % unicode(subenv))
         subenv = subenv.copy()
         argd = {}
         for i, arg in enumerate(subenv.args):
             try:
                 value = args[i]
             except IndexError:
-                raise ValueError("Missing argument '%s'" % arg)
+                raise ValueError(u"Missing argument '%s'" % arg)
 
             argd[arg] = value
         subenv.var = dict(basevar)
@@ -777,7 +886,7 @@ class Environment:
         return len(l)
 
     def urilist(self, uris):
-        return '\n'.join(uris)
+        return u'\n'.join(uris)
 
     def makelist(self, *items):
         return items
@@ -788,26 +897,26 @@ class Environment:
     def newclass(self, module_name, class_name, *args):
         module = importlib.import_module(module_name)
         Class = getattr(module, class_name)
-        self.log("Constructing local %s" % (Class),
-                 args, 'pp')
+        self.log(u"Constructing local %s" % (Class),
+                 args, u'pp')
         return Class(*args)
 
     def newlocalclass(self, path, module_name, class_name, *args):
-        loader = importlib.machinery.SourceFileLoader(
-            module_name, path)
-        module = loader.load_module()
-        Class = getattr(module, class_name)
-        return Class(*args)
+        raise Exception("Deprecated")
+        #with open(path, 'r') as f:
+        #    module = imp.load_module(module_name, f, os.path.basename(path))
+        #Class = getattr(module, class_name)
+        #return Class(*args)
 
     def useclass(self, inst, method, *args):
-        self.log("Calling method %s on %s" %
+        self.log(u"Calling method %s on %s" %
                  (method, inst),
-                 args, 'pp')
+                 args, u'pp')
         return getattr(inst, method)(*args)
 
     def debug(self):
-        self.log("Debug", {k: v for k, v in self.var.items()
-                           if not k.startswith('__')}, 'pp')
+        self.log(u"Debug", dict((k, v) for k, v in self.var.items()
+                           if not k.startswith(u'__')), u'pp')
 
     def every(self, interval=10, handler=None, *args):
         while True:
@@ -816,35 +925,43 @@ class Environment:
                 self.callsub(handler, *args)
 
     def attach(self, sub, on):
-        self.log("Attaching", sub.name + " on " + on.name)
+        self.log(u"Attaching", sub.name + u" on " + on.name)
         on.attached[sub.name] = sub
 
     def setlog(self, *args):
         if self.logger is None:
             return
         for arg in args:
-            if arg == 'mute':
+            if arg == u'mute':
                 self.logger.mute = True
-            elif arg == 'unmute':
+            elif arg == u'unmute':
                 self.logger.mute = False
-            elif arg.startswith('+'):
+            elif arg.startswith(u'+'):
                 arg = arg[1:]
                 if arg in self.logger.smute:
                     self.logger.smute.remove(arg)
-            elif arg.startswith('-'):
+            elif arg.startswith(u'-'):
                 arg = arg[1:]
                 if arg not in self.logger.smute:
                     self.logger.smute.append(arg)
 
     def i_am(self, what):
-        if what == 'graphical':
+        if what == u'graphical':
             if self.logger is not None:
                 return self.logger.graphical
         return False
 
+    def printhelp(self):
+        self.log("Help", "Please see https://github.com/eblade/restnote/blob/master/README.md")
+
+    def stomp(self, user, password, stomp_link, handler):
+        s = StompListener(self.logger, user, password, stomp_link, handler)
+        return s
+        
+
 if options.html is not None:
     logger = HTML(options.html)
-elif options.output_format == 'terminal':
+elif options.output_format == u'terminal':
     logger = Terminal()
 else:
     logger = None
